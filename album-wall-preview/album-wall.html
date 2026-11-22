@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>唱片墙 · 动画预览</title>
+<style>
+  :root { color-scheme: dark; font: 15px system-ui,sans-serif; background: #161817; color: #e9e7dd; }
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  .preview { min-height: 100vh; min-height: 100svh; display: grid; grid-template-rows: auto minmax(300px,1fr); }
+  .toolbar { display: flex; align-items: center; align-content: center; flex-wrap: wrap; gap: 8px 14px; padding: 12px 18px; border-bottom: 1px solid #383b36; background: #20231f; }
+  h1 { font-size: 17px; margin: 0 auto 0 0; letter-spacing: .08em; white-space: nowrap; }
+  .field { display: inline-flex; gap: 6px; align-items: center; }
+  button, select { font: inherit; color: inherit; background: #30352e; border: 1px solid #50564a; border-radius: 5px; padding: 5px 9px; }
+  button { cursor: pointer; }
+  button[disabled] { opacity: .55; cursor: default; }
+  button:focus-visible, select:focus-visible { outline: 2px solid #e3bb82; outline-offset: 2px; }
+  #stage { position: relative; overflow: hidden; background: #111612; }
+  #stage:fullscreen { width: 100%; height: 100%; }
+  #wall { position: absolute; top: 0; left: 50%; transform: translateX(-50%); display: grid; gap: 2px; }
+  .slot { width: var(--side); height: var(--side); overflow: hidden; perspective: calc(var(--side)*3); }
+  .tile { width: 100%; height: 100%; position: relative; transform-style: preserve-3d; }
+  .face { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; backface-visibility: hidden; }
+  .rear { transform: rotateY(180deg); }
+  #status { font-size: 13px; color: #d7bea5; }
+  #status:empty { display: none; }
+  @media (max-width: 640px) {
+    .toolbar { padding: 9px 12px; gap: 7px; }
+    h1 { width: 100%; }
+  }
+</style>
+</head>
+<body>
+<main class="preview">
+  <header class="toolbar">
+    <h1>唱片墙</h1>
+    <label class="field">行数 <select id="rows"><option value="3">3</option><option value="4">4</option><option value="5" selected>5</option><option value="6">6</option></select></label>
+    <label class="field">切换间隔 <select id="interval"><option value="1600">1.6 秒</option><option value="2600" selected>2.6 秒</option><option value="4500">4.5 秒</option></select></label>
+    <button id="toggle" type="button">暂停</button>
+    <button id="flip" type="button">翻一张</button>
+    <button id="import" type="button">导入封面</button>
+    <input id="files" type="file" accept="image/*" multiple hidden>
+    <button id="fullscreen" type="button">全屏</button>
+    <span id="status" role="status"></span>
+  </header>
+  <section id="stage" aria-label="专辑封面动画"><div id="wall" aria-hidden="true"></div></section>
+</main>
+<script>
+'use strict';
+
+const stage = document.querySelector('#stage');
+const wall = document.querySelector('#wall');
+const rowsInput = document.querySelector('#rows');
+const intervalInput = document.querySelector('#interval');
+const toggleButton = document.querySelector('#toggle');
+const flipButton = document.querySelector('#flip');
+const importButton = document.querySelector('#import');
+const fileInput = document.querySelector('#files');
+const fullscreenButton = document.querySelector('#fullscreen');
+const status = document.querySelector('#status');
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+const flipDuration = 350;
+const flipEasing = 'ease-in-out';
+
+const palettes = [
+  ['#272a2c','#ffbd79','#a74737'], ['#511f2b','#f7d2c5','#ee6847'],
+  ['#233f3e','#f2e6a6','#618b75'], ['#24283e','#ded8ff','#8189d9'],
+  ['#ded1ad','#30251d','#de5f36'], ['#252243','#e5b8e8','#b55490'],
+  ['#26353e','#d7f0e9','#44819f'], ['#aaa88c','#162c24','#51735a'],
+  ['#2b232a','#f2e2d6','#ab675d'], ['#20363d','#d2ddcc','#ff966a']
+];
+const titles = [
+  'AFTER IMAGE','DUSK SIGNAL','BLUE HOUR','HALF LIGHT','SOFT STATIC',
+  'SALT AIR','SLOW ORBIT','FIELD NOTES','NIGHT BUS','ROUND TRIP',
+  'SUNDAY TAPE','DEEP CURRENT','GLASSHOUSE','NEAR SHORE','OUTSIDE IN',
+  'RADIO SILENCE','INNER WEATHER','SIDE STREET','THE FAR BANK','STEREO BLUE',
+  'STILL LIFE','LOW CEILING','LATE SUMMER','TWIN SUNS','PARALLEL LINES',
+  'ECHO PARK','OPEN WATER','B-SIDE','VELVET SKY','NEON RAIN',
+  'IN TRANSIT','PAPER MOON','GREY DAWN','NOON TIDE','SECOND HOME',
+  'FIGURE EIGHT','LIGHT LEAK','NORTH WINDOW','DRIFT STUDY','LAST FERRY'
+];
+
+function randomFor(seed) {
+  return () => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+}
+
+function makeCover(title, index) {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 320;
+  const ctx = canvas.getContext('2d');
+  const paletteIndex = (index * 7 + Math.floor(index / palettes.length) * 3) % palettes.length;
+  const [base, ink, accent] = palettes[paletteIndex];
+  const random = randomFor(index + 19);
+
+  ctx.fillStyle = base;
+  ctx.fillRect(0, 0, 320, 320);
+  ctx.save();
+  ctx.translate(158, 151);
+  ctx.rotate((random() - .5) * .58);
+  ctx.strokeStyle = ink;
+  ctx.fillStyle = accent;
+  ctx.lineWidth = 1.5;
+
+  switch (index % 5) {
+    case 0:
+      for (let ring = 0; ring < 13; ring++) {
+        ctx.beginPath();
+        ctx.ellipse(-22 + ring * 3.8, 9 - ring * 2.3, 18 + ring * 8, 10 + ring * 6, -.3, 0, 2 * Math.PI);
+        ctx.stroke();
+      }
+      break;
+    case 1:
+      for (let bar = 0; bar < 13; bar++) {
+        const height = 48 + random() * 151;
+        ctx.fillStyle = bar % 3 === 0 ? ink : accent;
+        ctx.globalAlpha = .58 + random() * .42;
+        ctx.fillRect(-117 + bar * 18, 76 - height, 12, height);
+      }
+      break;
+    case 2:
+      ctx.fillStyle = ink;
+      ctx.beginPath();
+      ctx.arc(44, -43, 34 + random() * 28, 0, 2 * Math.PI);
+      ctx.fill();
+      for (let ridge = 0; ridge < 6; ridge++) {
+        ctx.fillStyle = ridge % 2 ? ink : accent;
+        ctx.globalAlpha = .24 + ridge * .11;
+        ctx.beginPath();
+        ctx.moveTo(-215, 39 + ridge * 15);
+        ctx.bezierCurveTo(-84, -104 + ridge * 12, -54, 133, 220, 45 + ridge * 8);
+        ctx.lineTo(220, 220);
+        ctx.lineTo(-215, 220);
+        ctx.fill();
+      }
+      break;
+    case 3:
+      for (let block = 0; block < 28; block++) {
+        const size = 6 + random() * 50;
+        ctx.fillStyle = block % 3 === 0 ? ink : accent;
+        ctx.globalAlpha = .23 + random() * .72;
+        ctx.fillRect(-110 + random() * 182, -109 + random() * 172, size, size);
+      }
+      break;
+    case 4:
+      for (let line = 0; line < 23; line++) {
+        ctx.strokeStyle = line % 3 ? accent : ink;
+        ctx.beginPath();
+        ctx.moveTo(-146, -94 + line * 7);
+        ctx.quadraticCurveTo(-32 + line * 2, 138 - line * 4, 160, -58 + line * 8);
+        ctx.stroke();
+      }
+      break;
+  }
+  ctx.restore();
+
+  for (let dot = 0; dot < 3200; dot++) {
+    ctx.fillStyle = random() > .5 ? '#ffffff10' : '#00000015';
+    ctx.fillRect(random() * 320, random() * 320, 1.5, 1.5);
+  }
+  ctx.fillStyle = base;
+  ctx.fillRect(0, 251, 320, 69);
+  ctx.fillStyle = ink;
+  ctx.font = '700 24px sans-serif';
+  ctx.fillText(title, 19, 286, 282);
+  ctx.font = '11px monospace';
+  ctx.fillText('STUDIO EDITION / ' + String(index + 1).padStart(2, '0'), 20, 304);
+  return canvas.toDataURL('image/jpeg', .86);
+}
+
+const demoCovers = titles.map(makeCover);
+let covers = demoCovers;
+let tiles = [];
+let layoutKey = '';
+let lastTile = null;
+let pending = null;
+let timer = null;
+let playing = !reducedMotion.matches;
+
+function shuffled(items) {
+  const copy = [...items];
+  for (let index = copy.length - 1; index > 0; index--) {
+    const other = Math.floor(Math.random() * (index + 1));
+    [copy[index], copy[other]] = [copy[other], copy[index]];
+  }
+  return copy;
+}
+
+function imageFace(className, source = '') {
+  const image = document.createElement('img');
+  image.className = 'face ' + className;
+  image.alt = '';
+  image.draggable = false;
+  if (source) image.src = source;
+  return image;
+}
+
+function renderWall(force = false) {
+  const gap = parseFloat(getComputedStyle(wall).columnGap);
+  const width = stage.clientWidth;
+  const height = stage.clientHeight;
+  const rows = Number(rowsInput.value);
+  if (width < 1 || height <= (rows - 1) * gap) return;
+
+  const side = (height - (rows - 1) * gap) / rows;
+  const columnsNeeded = Math.ceil((width + gap) / (side + gap));
+  const columns = columnsNeeded + columnsNeeded % 2;
+  const key = columns + 'x' + rows;
+  wall.style.setProperty('--side', side + 'px');
+  if (!force && key === layoutKey) return;
+
+  layoutKey = key;
+  pending?.animation.cancel();
+  pending = null;
+  lastTile = null;
+  wall.style.gridTemplateColumns = 'repeat(' + columns + ', var(--side))';
+  const deck = shuffled(covers);
+  const fragment = document.createDocumentFragment();
+  tiles = [];
+
+  for (let index = 0; index < rows * columns; index++) {
+    const slot = document.createElement('div');
+    const tile = document.createElement('div');
+    const current = deck[index % deck.length];
+    const front = imageFace('front', current);
+    const rear = imageFace('rear');
+
+    slot.className = 'slot';
+    tile.className = 'tile';
+    rear.hidden = true;
+    tile.append(front, rear);
+    slot.append(tile);
+    fragment.append(slot);
+    tiles.push({element: tile, front, rear, current});
+  }
+  wall.replaceChildren(fragment);
+}
+
+function pickNext(tile) {
+  const visible = new Set(tiles.map(item => item.current));
+  const unused = covers.filter(cover => !visible.has(cover));
+  const candidates = unused.length ? unused : covers.filter(cover => cover !== tile.current);
+  return candidates[Math.floor(Math.random() * candidates.length)];
+}
+
+async function flipOne() {
+  if (pending || !tiles.length || covers.length < 2) return;
+
+  const options = tiles.length > 1 ? tiles.filter(tile => tile !== lastTile) : tiles;
+  const tile = options[Math.floor(Math.random() * options.length)];
+  const next = pickNext(tile);
+  if (!next) return;
+
+  if (reducedMotion.matches) {
+    tile.front.src = next;
+    tile.current = next;
+    lastTile = tile;
+    return;
+  }
+
+  tile.rear.src = next;
+  tile.rear.hidden = false;
+  const animation = tile.element.animate(
+    [{transform: 'rotateY(0deg)'}, {transform: 'rotateY(180deg)'}],
+    {duration: flipDuration, easing: flipEasing, fill: 'both'}
+  );
+  const rotation = {animation};
+  pending = rotation;
+
+  try {
+    await animation.finished;
+    if (pending !== rotation) return;
+    tile.front.src = next;
+    tile.current = next;
+    lastTile = tile;
+  } catch (error) {
+    if (error.name !== 'AbortError') throw error;
+  } finally {
+    if (pending === rotation) {
+      animation.cancel();
+      tile.rear.hidden = true;
+      pending = null;
+    }
+  }
+}
+
+function updateTimer() {
+  clearInterval(timer);
+  timer = null;
+  if (playing && !document.hidden) timer = setInterval(flipOne, Number(intervalInput.value));
+  toggleButton.textContent = playing ? '暂停' : '播放';
+}
+
+async function importCovers(files) {
+  const images = [];
+  for (const file of files) {
+    const objectUrl = URL.createObjectURL(file);
+    try {
+      const image = new Image();
+      image.src = objectUrl;
+      await image.decode();
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 448;
+      const size = Math.min(image.naturalWidth, image.naturalHeight);
+      const left = (image.naturalWidth - size) / 2;
+      const top = (image.naturalHeight - size) / 2;
+      canvas.getContext('2d').drawImage(image, left, top, size, size, 0, 0, 448, 448);
+      images.push(canvas.toDataURL('image/jpeg', .89));
+    } catch {
+      // Skip unreadable images while retaining other valid selections.
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  }
+  return [...new Set(images)];
+}
+
+new ResizeObserver(() => renderWall()).observe(stage);
+rowsInput.addEventListener('change', () => renderWall());
+intervalInput.addEventListener('change', updateTimer);
+toggleButton.addEventListener('click', () => {
+  playing = !playing;
+  updateTimer();
+});
+flipButton.addEventListener('click', flipOne);
+importButton.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', async () => {
+  const files = [...fileInput.files];
+  if (!files.length) return;
+  fileInput.value = '';
+  importButton.disabled = true;
+  try {
+    const images = await importCovers(files);
+    if (images.length < 2) {
+      status.textContent = '请至少选两张不同且可读取的图片。';
+      return;
+    }
+    covers = images;
+    renderWall(true);
+    status.textContent = '已导入 ' + images.length + ' 张封面。';
+  } finally {
+    importButton.disabled = false;
+  }
+});
+fullscreenButton.addEventListener('click', async () => {
+  try {
+    await stage.requestFullscreen();
+  } catch {
+    status.textContent = '当前浏览器不支持此预览全屏。';
+  }
+});
+document.addEventListener('visibilitychange', updateTimer);
+fullscreenButton.disabled = !document.fullscreenEnabled;
+renderWall();
+updateTimer();
+</script>
+</body>
+</html>

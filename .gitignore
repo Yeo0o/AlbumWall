@@ -1,0 +1,16 @@
+# Build output and local IDE files
+bin/
+obj/
+build/
+.vs/
+*.user
+*.suo
+*.scr
+
+# Local workspace assets
+/.codex/
+/upload/
+/album-wall-test-covers/
+/album-wall-preview/album-wall-demo.mp4
+/AlbumWall-Windows11-*.zip
+/AlbumWall-Test-Covers.zip

@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>AlbumWall</AssemblyName>
+    <Version>0.3.0</Version>
+    <Product>Album Wall</Product>
+    <Description>Windows screensaver for flipping album covers</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Artwork/*.jpg" />
+    <PackageReference Include="HtmlAgilityPack" Version="1.12.4" />
+  </ItemGroup>
+</Project>
